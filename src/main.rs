@@ -13,35 +13,41 @@ use serde::{Deserialize, Serialize};
 type Nonce = AesNonce<typenum::U12>;
 
 // TODO: tests
+// TODO: logging
 
 #[derive(Serialize, Deserialize)]
-struct EncryptedFileData {
+struct EncryptionMetadata {
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
 }
 
-impl EncryptedFileData {
+impl EncryptionMetadata {
     pub fn new(nonce: Nonce, ciphertext: Vec<u8>) -> Self {
         let nonce_vec = nonce.to_vec();
 
-        EncryptedFileData {
+        EncryptionMetadata {
             nonce: nonce_vec,
             ciphertext,
         }
     }
 
-    // TODO: error handling
-    pub fn write_to_file(&self) {
+    pub fn write_to_file(&self) -> Result<(), std::io::Error> {
+        // FIXME: unwrap
         let serialized_data = bincode::serialize(&self).unwrap();
 
-        let mut file = File::create("data.aes").unwrap();
-        file.write_all(&serialized_data).unwrap();
+        let mut file = File::create("data.aes")?;
+        file.write_all(&serialized_data)?;
+
+        Ok(())
     }
 
-    // TODO: error handling
-    pub fn read_from_file() -> Self {
-        let file_data = read_file_data("data.aes").unwrap();
-        bincode::deserialize(&file_data).unwrap()
+    pub fn read_from_file(file_path: &str) -> Result<Self, std::io::Error> {
+        let plaintext = read_file_plaintext(file_path)?;
+
+        // FIXME: unwrap
+        let encryption_metadata = bincode::deserialize(&plaintext).unwrap();
+
+        Ok(encryption_metadata)
     }
 }
 
@@ -58,57 +64,52 @@ fn derive_key_from_password(password: String) -> Key<Aes256Gcm> {
     *key
 }
 
-fn encrypt_plaintext(
-    plaintext: &[u8],
-    key: Key<Aes256Gcm>,
-    nonce: Nonce,
-) -> Result<Vec<u8>, AesError> {
-    let cipher = Aes256Gcm::new(&key);
-    let ciphertext = cipher.encrypt(&nonce, plaintext)?;
-
-    Ok(ciphertext)
-}
-
-fn decrypt_ciphertext(
-    ciphertext: Vec<u8>,
-    key: Key<Aes256Gcm>,
-    nonce: Nonce,
-) -> Result<Vec<u8>, AesError> {
-    let cipher = Aes256Gcm::new(&key);
-    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref())?;
-
-    Ok(plaintext)
-}
-
-fn read_file_data(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
-    let mut file = File::open(file_path).unwrap();
+fn read_file_plaintext(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
+    let mut file = File::open(file_path)?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;
 
     Ok(contents)
 }
 
-fn main() -> Result<(), AesError> {
-    let key = derive_key_from_password(String::from("password"));
-    // let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+fn encrypt_file(file_path: &str, password: String) -> Result<(), AesError> {
+    let key = derive_key_from_password(password);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
 
-    // let plaintext = read_file_data("text.txt").unwrap();
-    // let ciphertext = encrypt_plaintext(plaintext.as_slice(), key, nonce).unwrap();
+    let plaintext = read_file_plaintext(file_path).expect("Can't read file data");
+    let ciphertext = cipher.encrypt(&nonce, plaintext.as_slice())?;
 
-    // let encrypted_file_data = EncryptedFileData::new(nonce, ciphertext);
-    // encrypted_file_data.write_to_file();
+    let encryption_metadata = EncryptionMetadata::new(nonce, ciphertext);
 
-    let encrypted_file_data = EncryptedFileData::read_from_file();
+    // TODO: use logger
+    match encryption_metadata.write_to_file() {
+        Ok(_) => println!("Successfully encrypted"),
+        Err(_) => println!("Error while doing encryption"),
+    }
 
-    let nonce: Nonce = AesNonce::clone_from_slice(&encrypted_file_data.nonce);
+    Ok(())
+}
 
-    let plaintext = decrypt_ciphertext(encrypted_file_data.ciphertext, key, nonce).unwrap();
+fn decrypt_file(file_path: &str, password: String) -> Result<(), AesError> {
+    let key = derive_key_from_password(password);
+
+    let encryption_metadata =
+        EncryptionMetadata::read_from_file(file_path).expect("Can't read encrypted file");
+
+    let nonce: Nonce = AesNonce::clone_from_slice(&encryption_metadata.nonce);
+
+    let cipher = Aes256Gcm::new(&key);
+    let plaintext = cipher.decrypt(&nonce, encryption_metadata.ciphertext.as_ref())?;
 
     dbg!(String::from_utf8(plaintext).unwrap());
 
     Ok(())
 }
 
-// NOTE: don't delete
-// let nonce_vec = nonce.to_vec();
-// let nonce: Nonce = AesNonce::clone_from_slice(&nonce_vec);
+fn main() -> Result<(), AesError> {
+    // encrypt_file("text.txt", String::from("password"))?;
+    decrypt_file("data.aes", String::from("password"))?;
+
+    Ok(())
+}
